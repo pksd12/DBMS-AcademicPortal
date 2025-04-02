@@ -692,3 +692,465 @@ from Student_registration_', student_id,' as c, course_offering as ofr
 where ofr.offering_id =', offering_id1,' and c.semester = ofr.semester and c.year = ofr.year	
 limit 1;')	
 ;
+
+execute quer3 into s_cg;	
+	
+if min_cg > s_cg	
+then flag := true;
+quer1:=req;
+req := concat(quer1, ', CG Criteria Not Met');	
+end if;	
+	
+quer1:= concat('select st.start_time
+from slots as st, course_offering as o
+where o.offering_id = ', offering_id1,' and o.slot_id = st.slot_id;');
+execute quer1 into c_start_time;
+
+quer1:= concat('select st.end_time
+from slots as st, course_offering as o
+where o.offering_id = ', offering_id1,' and o.slot_id = st.slot_id;');
+execute quer1 into c_end_time;
+
+quer1:= concat('select st.day
+from slots as st, course_offering as o
+where o.offering_id = ', offering_id1,' and o.slot_id = st.slot_id;');
+execute quer1 into day1;
+
+
+if flag <> true	
+then --insert into offering table	
+	quer1:= concat('select count(*)
+	from course_offering as o, student_courses_',student_id,' as s, slots as st
+	where o.offering_id = s.offering_id and o.slot_id = st.slot_id 
+		and st.day=',E'\'',day1,E'\'',' and st.start_time < ',E'\'',c_end_time,E'\'',' and st.end_time >', E'\'',c_start_time,E'\'',' and o.status = ', E'\'','Running', E'\'',';');
+	execute quer1 into clashes;
+	if clashes = 0
+	then 
+		quer4 := concat('insert into offering_enrollment_',NEW.offering_id, ' values(', student_id1,');');
+		execute quer4;
+		
+		quer1:= concat('select c.credit 
+		from course_offering as o, course as c
+		where o.offering_id = ',concat(E'\'', New.offering_id,E'\''),'
+			and o.course_id = c.course_id limit 1;');
+		execute quer1 into c_credit;
+
+		quer1:= concat('select o.year 
+					from course_offering as o
+					where o.offering_id = ', concat(E'\'',new.offering_id,E'\''),';');
+		execute quer1 into year1;
+
+		quer1:= concat('select o.semester 
+					from course_offering as o
+					where o.offering_id = ', concat(E'\'',new.offering_id,E'\''),';');
+		execute quer1 into sem;
+
+		quer1 := concat('update student_registration_', student_id, ' set cred_limit = cred_limit - ', c_credit, ' where year = ', year1,' and semester = ', sem,';');
+		execute quer1;
+
+	else 
+	return old;
+
+	end if;
+	
+
+
+
+else	
+	select ins_id into inst_id	
+	from course_offering as ofr	
+	where ofr.offering_id = NEW.offering_id;	
+	quer4 := concat('select count(*)	
+	from student_tickets_', student_id,';');	
+	execute quer4 into ct;	
+
+	tid := concat(E'\'',student_id, '_', ct,E'\'');	
+	quer4:=concat(E'\'',req,E'\'');	
+	quer5:= concat('insert into student_tickets_', student_id,'	
+	(ticket_id, offering_id, request) values(', tid,' ,', offering_id1, ', ', quer4,');');	
+
+	quer6:= concat('insert into faculty_tickets_', inst_id,	
+	'(ticket_id, student_id, offering_id, request) values(', tid,' ,', student_id, ', ', offering_id1, ', ', quer4,');');	
+	execute quer5;	
+	execute quer6;	
+
+	RETURN OLD;
+
+end if;	
+RETURN NEW;	
+END;	
+	
+$check_eligibility$	
+LANGUAGE plpgsql
+security definer
+;
+
+CREATE OR REPLACE FUNCTION update_cred_limit_registration()	
+RETURNS TRIGGER as $update_cred_limit_registration$	
+DECLARE	
+student_id varchar(30);
+student_id1 varchar(30);
+offering_id varchar(50);	
+offering_id1 varchar(50);	
+quer1 varchar(1000);	
+creditsum float(3);
+numb integer;
+BEGIN	
+
+creditsum:= 0;
+student_id := tg_argv[0];
+student_id1:= concat(E'\'',student_id,E'\'');	
+
+if NEW.cred_limit = 0
+then
+	quer1:= concat('select sum(sh.credits),count(*) 
+					from (select s.current_credits from student_registration_',student_id,' s order by year desc,semester desc limit 2)
+					as sh(credits) ;');
+	execute quer1 into creditsum,numb;
+
+
+	if numb = 0 or creditsum = 0
+	then 
+		NEW.cred_limit=18;
+		
+	else
+		execute 
+		concat('select s.program_core_credit, s.program_elective_credit, s.science_core_credit, s.open_elective_credit, s.cgpa   
+		from student_registration_',student_id,' s order by year desc,semester desc limit 1;') 
+		into new.program_core_credit, new.program_elective_credit, new.science_core_credit, new.open_elective_credit, new.cgpa;
+		NEW.cred_limit=1.25*(creditsum/2);
+		
+	end if;
+
+
+
+end if;	
+RETURN NEW;	
+END;
+$update_cred_limit_registration$	
+LANGUAGE plpgsql
+security definer
+;	
+
+
+CREATE OR REPLACE FUNCTION create_st_tables()		
+RETURNS TRIGGER as $create_st_tables$		
+DECLARE		
+target_off_id varchar(14);		
+target_st_id varchar(14);		
+quer1 varchar(1000);		
+quer2 varchar(1000);		
+quer3 varchar(1000);		
+quer4 varchar(1000);		
+quer5 varchar(1000);		
+quer6 varchar(1000);		
+tquer varchar(1000);		
+adv_id varchar(100);		
+		
+BEGIN		
+target_st_id:= NEW.student_id;
+
+quer1:= concat('create table Student_registration_',target_st_id,'(		
+Semester INTEGER,		
+YEAR INTEGER,		
+Current_credits FLOAT(3) DEFAULT 0,
+Program_core_credit FLOAT(3) DEFAULT 0,
+Program_elective_credit FLOAT(3) DEFAULT 0,
+SCIENCE_core_credit FLOAT(3) DEFAULT 0,
+Open_elective_credit FLOAT(3) DEFAULT 0,		
+CGPA float(3) default 0,
+Cred_limit FLOAT(3) default 0
+
+);');		
+execute quer1;		
+
+
+tquer := concat('CREATE TRIGGER create_registration_', target_st_id,'		
+BEFORE INSERT		
+ON Student_Registration_',target_st_id,'		
+FOR EACH ROW		
+EXECUTE PROCEDURE update_cred_limit_registration(',target_st_id,');');		
+execute tquer;		
+
+
+quer1 := E'\'Pending\'';		
+		
+quer2:= concat('create table Student_Tickets_',target_st_id,'(		
+Ticket_ID VARCHAR(30) NOT NULL PRIMARY KEY,		
+Offering_ID VARCHAR(100) NOT NULL,		
+status varchar(20) default ', quer1,',		
+Request VARCHAR(1000),		
+FOREIGN KEY(Offering_ID) REFERENCES Course_Offering(Offering_ID) ON DELETE CASCADE		
+);');		
+execute quer2;		
+quer3:= concat('create table Student_Courses_',target_st_id,'(		
+Offering_ID VARCHAR(100) NOT NULL,	
+FOREIGN KEY(Offering_ID) REFERENCES Course_Offering(Offering_ID) ON DELETE CASCADE		
+);');		
+execute quer3;	
+
+quer3:= concat('create table Student_Grades_',target_st_id,'(		
+Offering_ID VARCHAR(100) NOT NULL,
+Grade INTEGER default -1,
+FOREIGN KEY(Offering_ID) REFERENCES Course_Offering(Offering_ID) ON DELETE CASCADE		
+);');		
+execute quer3;		
+
+/*
+CREATE NEW STUDENT HERE AND GIVE RIGHTS TO CORRESPONDING DEAN AND BATCH_ADV
+ASSUMPTION:BOTH OF THEM NEED TO BE ADDED TO DATABASE BEFORE STUDENT 
+*/
+quer1:=concat('create user st_',target_st_id,' WITH PASSWORD ',E'\'iitropar\';');
+execute quer1;
+	
+quer1:= concat('grant select,insert on student_courses_',target_st_id,' to st_',target_st_id,';');
+execute quer1;
+
+quer1:= concat('grant select,insert on student_tickets_',target_st_id,', student_registration_',target_st_id,', student_grades_',target_st_id,'
+			   to st_',target_st_id,';');
+execute quer1;
+
+quer1:= concat('grant select on faculty,students,batch_adv,dean_acad,course,course_offering,Program_courses,slots,prerequisites
+				   to st_',target_st_id,';');
+execute quer1;
+
+
+quer1:= concat('select d.ins_id from batch_adv d where d.year=',NEW.year,' and d.dept=',E'\'',NEW.DEPT,E'\'',' limit 1;');
+
+execute quer1 into quer6;
+
+quer1:= concat('grant select on student_tickets_',target_st_id,', student_registration_',target_st_id,', student_grades_',target_st_id,'
+			   to adv_',quer6,';');
+execute quer1;
+
+tquer := concat('CREATE TRIGGER create_ticket_trigger_', target_st_id,'		
+BEFORE INSERT		
+ON Student_Courses_',target_st_id,'		
+FOR EACH ROW		
+EXECUTE PROCEDURE check_eligibility(',target_st_id,');');		
+execute tquer;		
+
+
+RETURN NEW;		
+END;		
+		
+$create_st_tables$		
+LANGUAGE plpgsql
+security definer
+;		
+	
+		
+CREATE TRIGGER create_student_tables		
+BEFORE INSERT		
+ON Students		
+FOR EACH ROW		
+EXECUTE PROCEDURE create_st_tables()		
+;		
+
+
+
+
+
+create or replace function is_the_student_ready_to_graduate(student_id1 varchar (40))
+returns varchar(10) as $$
+
+declare
+--student_id1 varchar(40);
+quer1 varchar(1000);
+quer2 varchar(1000);
+var1 FLOAT(3);
+var2 FLOAT(3);
+var3 FLOAT(3);
+var4 FLOAT(3);
+var5 FLOAT(3);
+
+
+begin
+quer1:= concat('select program_core_credit from student_registration_',student_id1,' order by year desc,semester desc limit 1;'
+);
+execute quer1 into var1;
+
+quer1:= concat('select program_elective_credit from student_registration_',student_id1,' order by year desc,semester desc limit 1;'
+);
+execute quer1 into var2;
+
+quer1:= concat('select science_core_credit from student_registration_',student_id1,' order by year desc,semester desc limit 1;'
+);
+execute quer1 into var3;
+
+quer1:= concat('select open_elective_credit from student_registration_',student_id1,' order by year desc,semester desc limit 1;'
+);
+execute quer1 into var4;
+
+quer1:= concat('select cgpa from student_registration_',student_id1,' order by year desc,semester desc limit 1;'
+);
+execute quer1 into var5;
+
+if var1>=40 and var2>=40 and var3>=40 and var4>=40 and var5>=5
+then 
+quer2:='YES';
+else
+quer2:= 'NO';
+end if;
+
+return quer2;
+END;
+$$	
+LANGUAGE plpgsql
+security invoker
+;	
+	
+
+
+
+create or replace function update_grades(offering_id varchar (40), file varchar(1000))
+returns varchar(10) as $$
+
+declare
+--student_id1 varchar(40);
+quer1 varchar(1000);
+quer2 varchar(1000);
+
+
+begin
+quer1:= concat('delete from offering_enrollment_',offering_id,';');
+execute quer1;
+
+quer2:= E'\',\'';
+quer1:= concat('COPY offering_enrollment_', offering_id,'(student_id, grade)
+FROM ',concat(E'\'',file,E'\''),'
+DELIMITER ', quer2,'
+CSV HEADER;'
+);
+execute quer1;
+
+execute concat('update course_offering set status = ', E'\'Completed\'',' where offering_id = ', E'\'',offering_id, E'\'',';');
+
+
+return 'Imported';
+END;
+$$	
+LANGUAGE plpgsql
+security invoker
+;	
+
+
+CREATE OR REPLACE FUNCTION gradesheet(student_id1 varchar(30))
+returns table(course varchar,grade integer,semester integer,year integer)
+language plpgsql
+security invoker
+as $$
+
+declare
+quer1 varchar(1000);
+
+begin
+quer1:= concat('select c.course_id,sg.grade,o.semester,o.year from student_grades_',student_id1,' sg,
+course_offering o, course c
+where c.course_id=o.course_id and o.offering_id=sg.offering_id
+;');
+return query execute(quer1);
+
+end
+$$
+;
+
+create or replace function get_cg(st_id varchar (40))
+returns float(3) as $$
+
+declare
+quer1 varchar(1000);
+quer2 varchar(1000);
+cg float(3);
+tc integer;
+
+begin
+quer1:= concat('select (sum((c.credit) * (s.grade))::float) /sum(c.credit)    
+			   from student_grades_',st_id,' as s, course_offering as o, course as c
+			   where o.offering_id = s.offering_id and c.course_id = o.course_id;');
+execute quer1 into cg;
+
+return cg;
+END;
+$$	
+LANGUAGE plpgsql	
+;	
+
+
+CREATE OR REPLACE FUNCTION update_cg_creds()		
+RETURNS TRIGGER as $update_cg_creds$		
+DECLARE		
+off_id varchar(14);		
+target_st_id varchar(14);		
+quer1 varchar(1000);		
+quer2 varchar(1000);		
+c_type varchar(100);
+c_credit float(3);
+cg float(3);
+sem integer;
+year1 integer;
+		
+BEGIN		
+
+if new.grade = -1
+then 
+return new;
+end if;
+
+off_id := tg_argv[0];
+quer1:= concat('select p.course_type 
+from students as s, course_offering as o, program_courses as p
+where ',concat(E'\'',New.student_id,E'\''),' = s.student_id and 
+		o.offering_id = ',concat(E'\'',off_id,E'\''),'
+	  and o.course_id = p.course_id and p.dept = s.dept 
+	  and s.year = p.year limit 1;');
+	 
+execute quer1 into c_type;  
+
+quer1:= concat('select c.credit 
+from course_offering as o, course as c
+where o.offering_id = ',concat(E'\'',off_id,E'\''),'
+	  and o.course_id = c.course_id limit 1;');
+execute quer1 into c_credit;
+
+quer1:= concat('select o.year 
+			  from course_offering as o
+			   where o.offering_id = ', concat(E'\'',off_id,E'\''),';');
+execute quer1 into year1;
+
+quer1:= concat('select o.semester 
+			  from course_offering as o
+			   where o.offering_id = ', concat(E'\'',off_id,E'\''),';');
+execute quer1 into sem;
+
+
+
+quer1 := concat('insert into student_grades_', New.student_id, ' values(', concat(E'\'',off_id,E'\''),',', New.grade,');');
+execute quer1;
+
+quer1:=concat('select * from get_cg(', E'\'',New.student_id, E'\'',');');
+execute quer1 into cg;
+
+--Cg updated in Registration
+quer1 := concat('update student_registration_', New.student_id, ' set cgpa = ',cg,' where year = ', year1,' and semester = ', sem,';');
+execute quer1;
+
+--Credits updated in Registration
+raise notice '(%d)', c_type;
+
+if new.grade > 5
+then
+quer1 := concat('update student_registration_', New.student_id, ' set ', c_type,'_credit =',c_type,'_credit +',c_credit, ' where year = ', year1,' and semester = ', sem,';');
+execute quer1;
+
+quer1 := concat('update student_registration_', New.student_id, ' set current_credits = current_credits + ',c_credit, ' where year = ', year1,' and semester = ', sem,';');
+execute quer1;
+end if;
+
+RETURN NEW;		
+END;		
+		
+$update_cg_creds$		
+LANGUAGE plpgsql
+security definer
+;
